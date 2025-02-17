@@ -24,6 +24,7 @@
 
 #define VMA_IMPLEMENTATION
 #include "vk_mem_alloc.h"
+#include <random>
 
 VulkanEngine* loadedEngine = nullptr;
 
@@ -73,6 +74,47 @@ void VulkanEngine::init_pipelines()
 {
     init_background_pipelines();
     init_mesh_pipeline();
+    init_particle_pipelines();
+}
+
+void VulkanEngine::init_particle_pipelines() {
+    VkPipelineLayoutCreateInfo computeLayout{};
+    computeLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    computeLayout.pSetLayouts = &_particleComputeDescriptorLayout;
+    computeLayout.setLayoutCount = 1;
+
+    VK_CHECK(vkCreatePipelineLayout(_device, &computeLayout, nullptr, &_particlePipelineLayout));
+
+    VkShaderModule particleComputeShader;
+    if (!vkutil::load_shader_module("../shaders/particle.comp.spv", _device, &particleComputeShader))
+    {
+        fmt::print("Error when building the compute shader \n");
+        throw std::exception("Error building compute shader");
+    }
+
+    VkPipelineShaderStageCreateInfo stageinfo{};
+    stageinfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stageinfo.pNext = nullptr;
+    stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageinfo.module = particleComputeShader;
+
+    // This is the entry point of the shader.
+    // A shader can have multiple entry points.
+    stageinfo.pName = "main";
+
+    VkComputePipelineCreateInfo computePipelineCreateInfo{};
+    computePipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    computePipelineCreateInfo.layout = _particlePipelineLayout;
+    computePipelineCreateInfo.stage = stageinfo;
+
+    VK_CHECK(vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &_particlePipeline));
+
+    vkDestroyShaderModule(_device, particleComputeShader, nullptr);
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroyPipelineLayout(_device, _particlePipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _particlePipeline, nullptr);
+    });
 }
 
 void VulkanEngine::init_background_pipelines()
@@ -293,6 +335,10 @@ void VulkanEngine::draw_background(VkCommandBuffer cmd)
     vkCmdDispatch(cmd, std::ceil(_drawExtent.width / 16.0), std::ceil(_drawExtent.height / 16.0), 1);
 }
 
+void VulkanEngine::update_particles() {
+    VK_CHECK(vkCmdBindPipeline())
+}
+
 /// <summary>
 /// https://vkguide.dev/docs/new_chapter_1/vulkan_mainloop_code/
 /// - added deletion queue https://vkguide.dev/docs/new_chapter_2/vulkan_new_rendering/
@@ -467,6 +513,20 @@ void VulkanEngine::draw_geometry(VkCommandBuffer cmd) {
     vkCmdBindIndexBuffer(cmd, testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdDrawIndexed(cmd, testMeshes[2]->surfaces[0].count, 1, testMeshes[2]->surfaces[0].startIndex, 0, 0);
+
+    vkCmdEndRendering(cmd);
+}
+
+void VulkanEngine::draw_particles(VkCommandBuffer cmd) {
+
+
+    VkDeviceSize offsets{offsetof(GpuComputeParticle, position)};
+    VkDeviceSize size{ sizeof(GpuComputeParticle) };
+    VkDeviceSize stride{ sizeof(GpuComputeParticle) - sizeof(glm::vec2)};
+    vkCmdBindVertexBuffers2(cmd, 0, 0, &(_particleBuffers->particleBuffer.buffer), &offsets, &size, &stride);
+
+    // TODO: replace with actual vertex count.
+    vkCmdDraw(cmd, 1000, 1, 0, 0);
 
     vkCmdEndRendering(cmd);
 }
@@ -828,6 +888,57 @@ void VulkanEngine::destroy_buffer(const AllocatedBuffer& buffer)
     vmaDestroyBuffer(_allocator, buffer.buffer, buffer.allocation);
 }
 
+GpuComputeParticleBuffer VulkanEngine::generateParticleBuffer(int particleCount) {
+    std::default_random_engine e;
+    std::uniform_real<> rand_real(-1, 1);
+
+    std::vector<GpuComputeParticle> particles;
+    particles.resize(particleCount);
+    for (size_t i = 0; i < particleCount; i++)
+    {
+        GpuComputeParticle particle;
+        particle.position = glm::vec2(rand_real(e), rand_real(e));
+        particle.mass = 1;
+        particle.radius = 1;
+
+        particles.push_back(particle);
+    }
+
+    const size_t particleBufferSize = particleCount * sizeof(GpuComputeParticle);
+
+    GpuComputeParticleBuffer buffer;
+
+    // Create buffer on the GPU
+    buffer.particleBuffer = create_buffer(particleBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, VMA_MEMORY_USAGE_GPU_ONLY);
+
+    VkBufferDeviceAddressInfo deviceAdressInfo{ .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,.buffer = buffer.particleBuffer.buffer };
+    buffer.particleBufferAddress = vkGetBufferDeviceAddress(_device, &deviceAdressInfo);
+    buffer.bufferInfo.buffer = buffer.particleBuffer.buffer;
+    buffer.bufferInfo.offset = 0;
+    buffer.bufferInfo.range = VK_WHOLE_SIZE;
+
+    AllocatedBuffer staging = create_buffer(particleBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+
+    void* data = staging.allocation->GetMappedData();
+
+    memcpy(data, particles.data(), particleBufferSize);
+
+    particles.clear();
+
+    immediate_submit([&](VkCommandBuffer cmd) {
+        VkBufferCopy particleCopy{ 0 };
+        particleCopy.dstOffset = 0;
+        particleCopy.srcOffset = 0;
+        particleCopy.size = particleBufferSize;
+
+        vkCmdCopyBuffer(cmd, staging.buffer, buffer.particleBuffer.buffer, 1, &particleCopy);
+    });
+
+    destroy_buffer(staging);
+
+    return buffer;
+}
+
 GPUMeshBuffers VulkanEngine::uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices)
 {
     const size_t vertexBufferSize = vertices.size() * sizeof(Vertex);
@@ -887,6 +998,49 @@ GPUMeshBuffers VulkanEngine::uploadMesh(std::span<uint32_t> indices, std::span<V
 
 }
 
+void VulkanEngine::init_particle_buffers() {
+    for (size_t i = 0; i < PARTICLE_OVERLAP; i++)
+    {
+        _particleBuffers[i] = generateParticleBuffer(1000);
+    }
+}
+
+void VulkanEngine::init_particle_descriptors() {
+    {
+        DescriptorLayoutBuilder builder;
+
+        builder.add_binding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        builder.add_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        _particleComputeDescriptorLayout = builder.build(_device, VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+
+    globalDescriptorAllocator.allocate(_device, _particleComputeDescriptorLayout, PARTICLE_OVERLAP, _particleComputeDescriptors);
+
+    init_particle_buffers();
+
+    for (size_t i = 0; i < PARTICLE_OVERLAP; i++)
+    {
+        VkWriteDescriptorSet descriptorWrites[2]{};
+        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[0].dstSet = _particleComputeDescriptors[i];
+        descriptorWrites[0].dstBinding = 0;
+        descriptorWrites[0].dstArrayElement = 0;
+        descriptorWrites[0].descriptorCount = 1;
+        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[0].pBufferInfo = &_particleBuffers[i].bufferInfo;
+
+        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[1].dstSet = _particleComputeDescriptors[i];
+        descriptorWrites[1].dstBinding = 1;
+        descriptorWrites[1].dstArrayElement = 0;
+        descriptorWrites[1].descriptorCount = 1;
+        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptorWrites[1].pBufferInfo = &_particleBuffers[(i + 1) % PARTICLE_OVERLAP].bufferInfo;
+
+        vkUpdateDescriptorSets(_device, 2, descriptorWrites, 0, nullptr);
+    }
+}
+
 void VulkanEngine::init_descriptors()
 {
     //create a descriptor pool that will hold 10 sets with 1 image each
@@ -897,6 +1051,12 @@ void VulkanEngine::init_descriptors()
 
     globalDescriptorAllocator.init_pool(_device, 10, sizes);
 
+    init_draw_image_descriptors();
+    init_particle_descriptors();
+}
+
+void VulkanEngine::init_draw_image_descriptors()
+{
     //make the descriptor set layout for our compute draw
     {
         DescriptorLayoutBuilder builder;
@@ -931,7 +1091,7 @@ void VulkanEngine::init_descriptors()
 
         // It seems like the descriptor layout is not part of the pool
         vkDestroyDescriptorSetLayout(_device, _drawImageDescriptorLayout, nullptr);
-    });
+        });
 }
 
 /// <summary>

@@ -81,6 +81,7 @@ struct FrameData {
 };
 
 constexpr unsigned int FRAME_OVERLAP = 2;
+constexpr unsigned int PARTICLE_OVERLAP = 3;
 
 class VulkanEngine {
 public:
@@ -115,6 +116,13 @@ public:
 
 	VkDescriptorSet _drawImageDescriptors;
 	VkDescriptorSetLayout _drawImageDescriptorLayout;
+
+	GpuComputeParticleBuffer _particleBuffers[PARTICLE_OVERLAP];
+	VkDescriptorSet _particleComputeDescriptors[PARTICLE_OVERLAP];
+	VkDescriptorSetLayout _particleComputeDescriptorLayout;
+	VkPipelineLayout _particlePipelineLayout;
+	VkPipeline _particlePipeline;
+	int currentParticleBufferIndex{ 0 };
 
 	FrameData _frames[FRAME_OVERLAP];
 	FrameData& get_current_frame() { return _frames[_frameNumber % FRAME_OVERLAP]; };
@@ -159,6 +167,8 @@ public:
 
 	void draw_geometry(VkCommandBuffer cmd);
 
+	void draw_particles(VkCommandBuffer cmd);
+
 	//run main loop
 	void run();
 
@@ -168,7 +178,8 @@ public:
 	/// <param name="function"></param>
 	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function);
 	GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
-
+	void init_particle_buffers();
+	GpuComputeParticleBuffer generateParticleBuffer(int particleCount);
 private:
 	void init_vulkan();
 	void init_swapchain();
@@ -176,7 +187,11 @@ private:
 	void init_sync_structures();
 	void init_descriptors();
 
+	void init_draw_image_descriptors();
+	void init_particle_descriptors();
+
 	void init_pipelines();
+	void init_particle_pipelines();
 	void init_background_pipelines();
 	void init_mesh_pipeline();
 
@@ -185,6 +200,8 @@ private:
 	void init_default_data();
 
 	void draw_background(VkCommandBuffer cmd);
+
+	void update_particles();
 
 	void create_swapchain(uint32_t width, uint32_t height);
 	void destroy_swapchain();

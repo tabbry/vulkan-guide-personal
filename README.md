@@ -454,3 +454,4 @@ https://vkguide.dev/docs/new_chapter_3/resizing_window/
 - What are bindless textures?
 - What is a dynamic buffer?
 - What is a forward declaration?
+- Does it make sense that all `VkDescriptorSetLayoutBinding` instances of the same `VkDescriptorSetLayout` have the same `stageFlags`?

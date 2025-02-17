@@ -84,3 +84,16 @@ struct GPUDrawPushConstants {
     glm::mat4 worldMatrix;
     VkDeviceAddress vertexBuffer;
 };
+
+struct GpuComputeParticle {
+    glm::vec2 position;
+    glm::vec2 velocity;
+    float mass;
+    float radius;
+};
+
+struct GpuComputeParticleBuffer {
+    AllocatedBuffer particleBuffer;
+    VkDeviceAddress particleBufferAddress;
+    VkDescriptorBufferInfo bufferInfo;
+};

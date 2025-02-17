@@ -18,6 +18,8 @@ struct DescriptorLayoutBuilder {
 /// https://vkguide.dev/docs/new_chapter_2/vulkan_shader_code/
 /// </summary>
 struct DescriptorAllocator {
+public:
+    bool poolInitialized{ false };
 
     struct PoolSizeRatio {
         VkDescriptorType type;
@@ -45,4 +47,5 @@ struct DescriptorAllocator {
     void destroy_pool(VkDevice device);
 
     VkDescriptorSet allocate(VkDevice device, VkDescriptorSetLayout layout);
+    void allocate(VkDevice device, VkDescriptorSetLayout layout, uint32_t count, VkDescriptorSet* descriptorSets);
 };

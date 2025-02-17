@@ -1,0 +1,27 @@
+#version 450
+
+struct Particle{
+    vec2 position;
+    vec2 velocity;
+    float mass;
+    float radius;
+};
+
+layout(std430, binding = 0) buffer InputParticles{
+    Particle particlesIn[];
+};
+
+layout(std430, binding = 1) buffer OutputParticles{
+    Particle particlesOut[];
+};
+
+layout (local_size_x = 256) in;
+
+void main(){
+    uint index = gl_GlobalInvocationID.x;
+    Particle particle = particlesIn[index];
+    particlesOut[index].position = particle.position + particle.velocity;
+    particlesOut[index].velocity = particle.velocity - particle.position * 0.5;
+    particlesOut[index].mass = particle.mass;
+    particlesOut[index].radius = particle.radius;
+}
